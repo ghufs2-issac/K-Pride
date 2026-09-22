@@ -865,7 +865,8 @@
       letter-spacing: -.04em;
       white-space: nowrap;
       pointer-events: none;
-      animation: caption-hint-twinkle 4.8s ease-in-out infinite;
+      animation: none;
+      opacity: 1;
     }
 
     .caption-hint.dictionary-active {
@@ -885,16 +886,6 @@
       gap: 6px;
     }
 
-    @keyframes caption-hint-twinkle {
-      0%, 100% {
-        opacity: .42;
-        text-shadow: 0 0 2px rgba(255, 143, 189, .24);
-      }
-      50% {
-        opacity: 1;
-        text-shadow: 0 0 7px rgba(255, 143, 189, .78), 0 0 13px rgba(255, 143, 189, .34);
-      }
-    }
 
     .caption-details .vocab-list {
       margin-top: 7.6px;
@@ -1564,6 +1555,7 @@
     let dictionaryMode = false;
     const rates = [1, 0.5, 0.75];
     let rateIndex = 0;
+    const DICTIONARY_RETURN_KEY = "englishListeningLab.dictionaryReturn:" + location.pathname;
 
     function formatTime(seconds) {
       const safe = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
@@ -1632,6 +1624,84 @@
       });
     }
 
+    function saveDictionaryReturnState() {
+      const state = {
+        time: Number.isFinite(video.currentTime) ? video.currentTime : 0,
+        playbackRate: video.playbackRate,
+        mode: mode,
+        dictionaryMode: dictionaryMode,
+        repeatUnitIndex: repeatUnitIndex,
+        scrollY: window.scrollY,
+        savedAt: Date.now()
+      };
+      const serialized = JSON.stringify(state);
+      try { sessionStorage.setItem(DICTIONARY_RETURN_KEY, serialized); } catch (error) {}
+      try { localStorage.setItem(DICTIONARY_RETURN_KEY, serialized); } catch (error) {}
+    }
+
+    function readDictionaryReturnState() {
+      let raw = null;
+      try { raw = sessionStorage.getItem(DICTIONARY_RETURN_KEY); } catch (error) {}
+      if (!raw) {
+        try { raw = localStorage.getItem(DICTIONARY_RETURN_KEY); } catch (error) {}
+      }
+      if (!raw) return null;
+      try {
+        const state = JSON.parse(raw);
+        if (!state || !Number.isFinite(Number(state.time))) return null;
+        return state;
+      } catch (error) {
+        return null;
+      }
+    }
+
+    function clearDictionaryReturnState() {
+      try { sessionStorage.removeItem(DICTIONARY_RETURN_KEY); } catch (error) {}
+      try { localStorage.removeItem(DICTIONARY_RETURN_KEY); } catch (error) {}
+    }
+
+    function restoreDictionaryReturnState() {
+      const state = readDictionaryReturnState();
+      if (!state || video.readyState < 1 || !Number.isFinite(video.duration)) return;
+
+      clearDictionaryReturnState();
+
+      const savedRate = Number(state.playbackRate);
+      const savedRateIndex = rates.findIndex(function(rate) {
+        return Math.abs(rate - savedRate) < 0.001;
+      });
+      rateIndex = savedRateIndex >= 0 ? savedRateIndex : 0;
+      video.playbackRate = rates[rateIndex];
+      rateButton.textContent = "배속 " + rates[rateIndex] + "×";
+
+      const savedMode = ["english", "detailed", "blank"].includes(state.mode)
+        ? state.mode : "english";
+      setMode(savedMode);
+      setDictionaryMode(Boolean(state.dictionaryMode));
+
+      repeatUnitIndex = Number.isInteger(state.repeatUnitIndex) &&
+        state.repeatUnitIndex >= 0 && state.repeatUnitIndex < units.length
+        ? state.repeatUnitIndex : -1;
+      const repeating = repeatUnitIndex >= 0;
+      repeatButton.classList.toggle("active", repeating);
+      repeatButton.setAttribute("aria-pressed", String(repeating));
+      repeatButton.textContent = repeating ? "■ 정지" : "↻ 반복";
+      repeatButton.title = repeating ? "현재 문장 반복 정지" : "현재 문장 반복 재생";
+
+      const time = Math.max(0, Math.min(Number(state.time), video.duration));
+      video.pause();
+      video.currentTime = time;
+      progress.value = String(time);
+      currentTimeEl.textContent = formatTime(time);
+      renderUnit(unitIndexAt(time), true);
+      updateWordHighlight(time);
+      updateTimeline();
+
+      if (Number.isFinite(Number(state.scrollY))) {
+        requestAnimationFrame(function() { window.scrollTo(0, Number(state.scrollY)); });
+      }
+    }
+
     function activateWord(wordElement) {
       if (!dictionaryMode) {
         playFromWordElement(wordElement);
@@ -1640,6 +1710,7 @@
       // Strip surrounding punctuation, keeping internal apostrophes and hyphens.
       const query = wordElement.textContent.trim().replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, "");
       if (!query) return;
+      saveDictionaryReturnState();
       video.pause();
       clearRepeatTimer();
       window.open("https://en.dict.naver.com/#/search?query=" + encodeURIComponent(query),
@@ -1813,6 +1884,13 @@
       progress.max = String(video.duration);
       durationEl.textContent = formatTime(video.duration);
       updateTimeline();
+      restoreDictionaryReturnState();
+    });
+
+    window.addEventListener("pageshow", restoreDictionaryReturnState);
+    window.addEventListener("focus", restoreDictionaryReturnState);
+    document.addEventListener("visibilitychange", function() {
+      if (!document.hidden) restoreDictionaryReturnState();
     });
 
     progress.addEventListener("pointerdown", function() { dragging = true; });
@@ -1859,6 +1937,7 @@
     setMode("english");
     setPlayingUi();
     requestAnimationFrame(updateTimeline);
+    restoreDictionaryReturnState();
   </script>
 </body>
 </html>
